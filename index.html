@@ -29,6 +29,11 @@ input,select,button{font:inherit;color:var(--ink);background:var(--panel);border
 input[type=text]{width:120px;text-transform:uppercase}
 button{cursor:pointer;font-weight:600}
 button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visible{outline:2px solid var(--e9);outline-offset:2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 14px}
+.chips button{border-radius:999px;padding:6px 14px}
+.chips button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
+.chips button[aria-disabled=true]{opacity:.45;text-decoration:line-through}
+.src{font-size:13px;color:var(--muted)}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .seg button{border:0;border-radius:0;padding:7px 12px;background:var(--panel)}
 .seg button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
@@ -77,21 +82,22 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
 <header>
   <h1>Scalp Signal</h1>
   <div class="bar">
-    <input type="text" id="sym" list="syms" aria-label="Trading pair" value="BTCUSDT">
-    <datalist id="syms"><option>BTCUSDT</option><option>ETHUSDT</option><option>SOLUSDT</option><option>EGLDUSDT</option><option>BNBUSDT</option><option>XRPUSDT</option><option>DOGEUSDT</option></datalist>
+    <input type="text" id="sym" aria-label="Any other Binance symbol" placeholder="Other symbol">
     <div class="seg" role="group" aria-label="Timeframe">
-      <button data-tf="5m">5 min</button><button data-tf="15m">15 min</button>
+      <button data-tf="5m">5 min</button><button data-tf="15m">15 min</button><button data-tf="1h">1 hour</button>
     </div>
     <button id="refresh">Refresh</button>
     <button id="alerts">Turn on alerts</button>
   </div>
 </header>
+<nav class="chips" id="chips" aria-label="Markets"></nav>
 
 <section class="hero" aria-live="polite">
   <div>
     <p class="verdict v-wait" id="verdict">…</p>
     <p class="sub" id="why">Loading market data.</p>
     <div class="price" id="price"></div>
+    <div class="src" id="src"></div>
     <div class="status" id="status"></div>
   </div>
   <div>
@@ -130,7 +136,8 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
     <div class="grid">
       <label>Stop loss (× ATR)<input type="number" id="stopAtr" step="0.1" min="0.3"></label>
       <label>Take profit (× ATR)<input type="number" id="tgtAtr" step="0.1" min="0.3"></label>
-      <label>Fee per side (%)<input type="number" id="fee" step="0.01" min="0"></label>
+      <label>Futures fee per side (%)<input type="number" id="feeFut" step="0.01" min="0"></label>
+      <label>Spot fee per side (%)<input type="number" id="feeSpot" step="0.01" min="0"></label>
       <label>Max candles in a trade<input type="number" id="maxBars" step="1" min="3"></label>
       <label class="inline"><input type="checkbox" id="shorts">Show short signals (futures only)</label>
       <label class="inline"><input type="checkbox" id="htf">Only trade with the higher-timeframe trend</label>
@@ -138,30 +145,66 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
   </details>
 </section>
 
-<footer>Signals use closed candles only, so they never repaint. Entries in the backtest fill at the next candle's open; if stop and target hit in the same candle, it counts as a loss. Data from Binance public market data. This is a tool, not advice.</footer>
+<footer>Signals use closed candles only, so they never repaint. Entries in the backtest fill at the next candle's open; if stop and target hit in the same candle, it counts as a loss. Data from Binance Futures (gold, silver, oil, crypto and other TradFi contracts) or Binance Spot when a market isn’t listed on futures. This is a tool, not advice.</footer>
 </main>
 
 <script>
 const $=s=>document.querySelector(s);
-const DEF={sym:'BTCUSDT',tf:'5m',stopAtr:1.5,tgtAtr:2.5,fee:0.1,maxBars:36,shorts:false,htf:true};
+const PRESETS=[
+  {label:'EUR/USD',c:['EURUSDT']},
+  {label:'Nasdaq-100',c:['NDXUSDT','NAS100USDT','US100USDT','USTECUSDT','QQQUSDT']},
+  {label:'Gold',c:['XAUUSDT']},
+  {label:'WTI oil',c:['CLUSDT']},
+  {label:'Silver',c:['XAGUSDT']},
+  {label:'BTC',c:['BTCUSDT']},{label:'ETH',c:['ETHUSDT']},{label:'SOL',c:['SOLUSDT']}];
+const DEF={label:'Gold',cands:['XAUUSDT'],tf:'15m',stopAtr:1.5,tgtAtr:2.5,feeFut:0.05,feeSpot:0.1,maxBars:36,shorts:false,htf:true};
 let S={...DEF};
-try{S={...DEF,...JSON.parse(localStorage.getItem('scalp-settings')||'{}')}}catch(e){}
-const save=()=>{try{localStorage.setItem('scalp-settings',JSON.stringify(S))}catch(e){}};
-const HTF={'5m':'15m','15m':'1h'};
-let data=null,lastAlertKey=null,firstLoad=true,timer=null,busy=false;
+try{const o=JSON.parse(localStorage.getItem('scalp-settings2')||'{}');S={...DEF,...o}}catch(e){}
+const save=()=>{try{localStorage.setItem('scalp-settings2',JSON.stringify(S))}catch(e){}};
+const HTF={'5m':'15m','15m':'1h','1h':'4h'};
+let data=null,M=null,lastAlertKey=null,firstLoad=true,busy=false;
+const fee=()=>M&&M.mkt==='fut'?S.feeFut:S.feeSpot;
+const missing=new Set();
 
 /* ---------- data ---------- */
-async function getK(sym,tf,limit,endTime){
-  const q=`symbol=${sym}&interval=${tf}&limit=${limit}`+(endTime?`&endTime=${endTime}`:'');
+const SPOT=['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com'];
+let futInfo=null,futErr=null;
+async function loadFutInfo(){
+  if(futInfo)return futInfo;
+  try{const r=await fetch('https://fapi.binance.com/fapi/v1/exchangeInfo');if(!r.ok)throw new Error(r.status);
+    const d=await r.json();futInfo=new Map(d.symbols.filter(x=>x.status==='TRADING').map(x=>[x.symbol,x.contractType||'']))}
+  catch(e){futErr=e;futInfo=new Map()}
+  return futInfo;
+}
+async function getK(m,tf,limit,endTime){
+  const lim=Math.min(limit,m.mkt==='fut'?1500:1000);
+  const q=`symbol=${m.sym}&interval=${tf}&limit=${lim}`+(endTime?`&endTime=${endTime}`:'');
+  const urls=m.mkt==='fut'?[`https://fapi.binance.com/fapi/v1/klines?${q}`]:SPOT.map(h=>`${h}/api/v3/klines?${q}`);
   let err;
-  for(const h of['https://data-api.binance.vision','https://api.binance.com','https://api1.binance.com']){
-    try{
-      const r=await fetch(`${h}/api/v3/klines?${q}`);
-      if(!r.ok){let m=r.status+'';try{m=(await r.json()).msg||m}catch(e){}throw new Error(m)}
+  for(const u of urls){
+    try{const r=await fetch(u);
+      if(!r.ok){let msg=r.status+'';try{msg=(await r.json()).msg||msg}catch(e){}throw new Error(msg)}
       return(await r.json()).map(k=>({t:k[0],o:+k[1],h:+k[2],l:+k[3],c:+k[4],v:+k[5],ct:k[6]}));
     }catch(e){err=e;if(/Invalid symbol/i.test(e.message))break}
   }
   throw err;
+}
+async function resolve(cands){
+  const fi=await loadFutInfo();
+  for(const c of cands)if(fi.has(c))return{sym:c,mkt:'fut',tradfi:/TRAD/i.test(fi.get(c))};
+  for(const c of cands){try{const k=await getK({sym:c,mkt:'spot'},'1h',1);if(k.length)return{sym:c,mkt:'spot',tradfi:false}}catch(e){}}
+  return null;
+}
+async function pick(label,cands){
+  $('#status').textContent=`Finding ${label} on Binance…`;$('#status').className='status';
+  const m=await resolve(cands);
+  if(!m){missing.add(label);renderChips();
+    $('#status').innerHTML=`<span class="err">${label} isn’t listed on Binance${futErr?' (Binance Futures couldn’t be reached from this browser)':''}. Pick another market.</span>`;return}
+  M={...m,label};S.label=label;S.cands=cands;save();data=null;firstLoad=true;renderChips();load();
+}
+function renderChips(){
+  $('#chips').innerHTML=PRESETS.map((p,i)=>`<button data-i="${i}" aria-pressed="${S.label===p.label}" aria-disabled="${missing.has(p.label)}">${p.label}</button>`).join('');
+  document.querySelectorAll('#chips button').forEach(b=>b.onclick=()=>{const p=PRESETS[b.dataset.i];pick(p.label,p.c)});
 }
 
 /* ---------- indicators ---------- */
@@ -210,7 +253,7 @@ function backtest(k,I){
       if(pos.d>0){if(b.l<=pos.stop){x=pos.stop;why='Stop'}else if(b.h>=pos.tgt){x=pos.tgt;why='Target'}}
       else{if(b.h>=pos.stop){x=pos.stop;why='Stop'}else if(b.l<=pos.tgt){x=pos.tgt;why='Target'}}
       if(x===null&&i-pos.i>=S.maxBars-1){x=b.c;why='Time'}
-      if(x!==null){trades.push({...pos,x,xi:i,why,pnl:pos.d*(x-pos.entry)/pos.entry*100-2*S.fee});pos=null;continue}
+      if(x!==null){trades.push({...pos,x,xi:i,why,pnl:pos.d*(x-pos.entry)/pos.entry*100-2*fee()});pos=null;continue}
     }
     if(!pos&&i<k.length-1)for(const d of dirs)if(signal(I,i,d)){
       const e=k[i+1].o,A=I.a[i];pos={d,si:i,i:i+1,t:k[i+1].t,entry:e,stop:e-d*S.stopAtr*A,tgt:e+d*S.tgtAtr*A};break}
@@ -225,26 +268,27 @@ function stats(tr){
 }
 
 /* ---------- formatting ---------- */
-const fp=p=>p.toFixed(p>=1000?2:p>=10?3:p>=1?4:6);
+const fp=p=>p.toFixed(p>=1000?2:p>=10?3:p>=1?5:6);
 const pct=v=>(v>0?'+':'')+v.toFixed(2)+'%';
 const tm=t=>new Date(t).toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'});
 
 /* ---------- main load ---------- */
 async function load(){
-  if(busy)return;busy=true;$('#status').textContent='Updating…';$('#status').className='status';
+  if(busy||!M)return;busy=true;$('#status').textContent='Updating…';$('#status').className='status';
   try{
-    const sym=S.sym.toUpperCase().trim();
-    const[recent,hk]=await Promise.all([getK(sym,S.tf,1000),getK(sym,HTF[S.tf],500)]);
-    const older=await getK(sym,S.tf,1000,recent[0].t-1);
+    const[recent,hk]=await Promise.all([getK(M,S.tf,1500),getK(M,HTF[S.tf],500)]);
+    const older=await getK(M,S.tf,1500,recent[0].t-1);
     const all=[...older,...recent],now=Date.now();
     const closed=all.filter(x=>x.ct<now),live=all[all.length-1];
+    if(closed.length<120)throw new Error('not enough price history yet for this market');
     const I=indicators(closed,hk.filter(x=>x.ct<now));
-    const bt=backtest(closed,I);
-    data={sym,closed,live,I,bt};
+    data={sym:M.label,closed,live,I,bt:backtest(closed,I)};
     render();
-    $('#status').textContent=`Updated ${new Date().toLocaleTimeString()} · refreshes every 30 s`;
+    const wd=new Date().getUTCDay(),wk=M.tradfi&&(wd===0||wd===6);
+    $('#status').innerHTML=`Updated ${new Date().toLocaleTimeString()}, refreshes every 30 s`+
+      (wk?`<br><span class="err">Weekend: the real ${M.label} market is closed. Prices now come only from Binance’s own order book and can jump. Don’t trust weekend signals.</span>`:'');
   }catch(e){
-    $('#status').innerHTML=`<span class="err">Couldn’t load ${S.sym}: ${e.message}. Check the pair name (e.g. BTCUSDT) and your connection.</span>`;
+    $('#status').innerHTML=`<span class="err">Couldn’t load ${M.label}: ${e.message}.</span>`;
   }finally{busy=false}
 }
 
@@ -271,19 +315,22 @@ function render(){
   }
   $('#verdict').textContent=V;$('#verdict').className='verdict '+cls;$('#why').textContent=why;
   $('#price').textContent=`${sym} ${fp(live.c)}`;
+  $('#src').textContent=`Binance ${M.mkt==='fut'?'Futures':'Spot'} ${M.sym}, fee ${fee()}% per side`;
   document.title=`${V} ${sym} ${fp(live.c)}`;
   $('#ladder').innerHTML=lad?[['t','Take profit',lad.t],['e','Entry',lad.e],['s','Stop loss',lad.s]]
     .map(([c,n,v])=>`<div class="rung ${c}"><span>${n}</span><b>${fp(v)} <small>(${pct((v-lad.e)/lad.e*100)})</small></b></div>`).join(''):'';
   $('#checks').innerHTML=showChecks?dirs.map(d=>`<li><h3>${d>0?'Buy':'Short'} checklist</h3></li>`+
     checks(I,L,d).map(x=>`<li><span class="${x.ok?'ok':'no'}">${x.ok?'✓':'○'}</span>${x.n}</li>`).join('')).join(''):'';
 
+  let mv=0,mn=0;for(let i=Math.max(60,L-100);i<=L;i++){mv+=I.a[i]/I.c[i]*100;mn++}const moveX=mv/mn/(2*fee());
   const st=stats(bt.trades),days=((k[L].ct-k[60].t)/864e5).toFixed(1),bal=S.stopAtr/(S.stopAtr+S.tgtAtr)*100;
   $('#stats').innerHTML=[[st.n,'trades in '+days+' days'],[st.win.toFixed(0)+'%',`win rate (break-even ≈ ${bal.toFixed(0)}% + fees)`],
-    [pct(st.net),'net after fees'],[isFinite(st.pf)?st.pf.toFixed(2):'∞','profit factor'],['−'+st.dd.toFixed(1)+'%','worst drawdown'],[pct(st.avg),'average trade']]
+    [pct(st.net),'net after fees'],[isFinite(st.pf)?st.pf.toFixed(2):'∞','profit factor'],['−'+st.dd.toFixed(1)+'%','worst drawdown'],[pct(st.avg),'average trade'],[moveX.toFixed(1)+'×','candle move vs fees (want 5× or more)']]
     .map(([b,s])=>`<div class="stat"><b>${b}</b><span>${s}</span></div>`).join('');
   const j=$('#judge');
   if(st.n<20){j.className='judge';j.textContent=`Only ${st.n} trades in this sample. That’s not enough to trust this setup in either direction. Try the other timeframe or a busier pair.`}
   else if(st.net<=0){j.className='judge bad';j.textContent=`This setup lost ${pct(st.net)} on ${sym} ${S.tf} over the last ${days} days after fees. Don’t trade these signals on this pair right now.`}
+  else if(moveX<3){j.className='judge';j.textContent=`Profitable on paper, but a typical candle only moves ${moveX.toFixed(1)}× the fees. Slippage alone can erase that. Switch to a longer timeframe.`}
   else if(st.pf<1.3){j.className='judge';j.textContent=`Barely positive (profit factor ${st.pf.toFixed(2)}). One bad session wipes it out. Paper trade only.`}
   else{j.className='judge good';j.textContent=`Positive over ${days} days. Recent results don’t guarantee the next ones: paper trade it for two weeks, then risk no more than 1% per trade.`}
 
@@ -348,17 +395,18 @@ $('#alerts').onclick=async()=>{
 
 /* ---------- controls ---------- */
 function syncUI(){
-  $('#sym').value=S.sym;document.querySelectorAll('[data-tf]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tf===S.tf));
-  ['stopAtr','tgtAtr','fee','maxBars'].forEach(id=>$('#'+id).value=S[id]);$('#shorts').checked=S.shorts;$('#htf').checked=S.htf;
+  document.querySelectorAll('[data-tf]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tf===S.tf));
+  ['stopAtr','tgtAtr','feeFut','feeSpot','maxBars'].forEach(id=>$('#'+id).value=S[id]);$('#shorts').checked=S.shorts;$('#htf').checked=S.htf;
 }
-document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{S.tf=b.dataset.tf;save();syncUI();firstLoad=true;load()});
-$('#sym').onchange=()=>{S.sym=$('#sym').value.toUpperCase().trim();save();firstLoad=true;load()};
+const rerun=()=>{if(data){data.bt=backtest(data.closed,data.I);render()}};
+document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{if(!HTF[b.dataset.tf])return;S.tf=b.dataset.tf;save();syncUI();firstLoad=true;load()});
+$('#sym').onchange=()=>{const v=$('#sym').value.toUpperCase().trim();if(v)pick(v,[v])};
 $('#refresh').onclick=load;
-['stopAtr','tgtAtr','fee','maxBars'].forEach(id=>$('#'+id).onchange=()=>{const v=parseFloat($('#'+id).value);if(v>=0){S[id]=v;save();if(data){data.bt=backtest(data.closed,data.I);render()}}});
-['shorts','htf'].forEach(id=>$('#'+id).onchange=()=>{S[id]=$('#'+id).checked;save();if(data){data.bt=backtest(data.closed,data.I);render()}});
+['stopAtr','tgtAtr','feeFut','feeSpot','maxBars'].forEach(id=>$('#'+id).onchange=()=>{const v=parseFloat($('#'+id).value);if(v>=0){S[id]=v;save();rerun()}});
+['shorts','htf'].forEach(id=>$('#'+id).onchange=()=>{S[id]=$('#'+id).checked;save();rerun()});
 addEventListener('resize',draw);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
-syncUI();load();timer=setInterval(load,30000);
+if(!HTF[S.tf])S.tf='15m';syncUI();renderChips();pick(S.label,S.cands);setInterval(load,30000);
 </script>
 </body>
 </html>
