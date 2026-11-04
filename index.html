@@ -11,6 +11,7 @@
 :root{
   --bg:#E6EAEE;--panel:#F6F8FA;--ink:#18232E;--muted:#5B6875;--line:#C9D1D9;
   --buy:#0B7A5F;--sell:#B33A24;--wait:#8A6A12;--e9:#2F6FB3;--e21:#B07A1A;--e50:#7A5BA6;
+  --mBuy:#FFD000;--mShort:#FF3EA5;--mExit:#FF7A00;--mEdge:#18232E;
   color-scheme:light;box-sizing:border-box;
   padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
 }
@@ -34,6 +35,16 @@ button:focus-visible,input:focus-visible,select:focus-visible,summary:focus-visi
 .chips button[aria-pressed=true]{background:var(--ink);color:var(--bg);border-color:var(--ink)}
 .chips button[aria-disabled=true]{opacity:.45;text-decoration:line-through}
 .src{font-size:13px;color:var(--muted)}
+.mk{font-size:16px;-webkit-text-stroke:1px var(--mEdge)}
+dialog{border:0;border-radius:12px;padding:0;width:min(440px,calc(100% - 32px));background:var(--panel);color:var(--ink);box-shadow:0 24px 70px rgba(0,0,0,.4)}
+dialog::backdrop{background:rgba(10,15,20,.6)}
+.pop{padding:22px 22px 6px;border-top:10px solid var(--mBuy)}
+.pop .pv{font:800 64px/.9 "Barlow Condensed",sans-serif;margin:0}
+.pop .act{font:600 20px/1.2 "Barlow Condensed",sans-serif;margin:8px 0 4px}
+.pop p{margin:6px 0;color:var(--muted)}
+.pop .ladder{margin-top:12px}
+dialog form{padding:12px 22px 22px}
+dialog form button{width:100%;padding:12px;background:var(--ink);color:var(--bg);border-color:var(--ink);font-size:17px}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
 .seg button{border:0;border-radius:0;padding:7px 12px;background:var(--panel)}
 .seg button[aria-pressed=true]{background:var(--ink);color:var(--bg)}
@@ -111,7 +122,9 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
     <span><i style="background:var(--e9)"></i>EMA 9</span>
     <span><i style="background:var(--e21)"></i>EMA 21</span>
     <span><i style="background:var(--e50)"></i>EMA 50</span>
-    <span>▲ buy ▼ short ● exit</span>
+    <span><b class="mk" style="color:var(--mBuy)">▲</b> buy</span>
+    <span><b class="mk" style="color:var(--mShort)">▼</b> short</span>
+    <span><b class="mk" style="color:var(--mExit)">●</b> exit</span>
   </div>
   <canvas id="cv" aria-label="Price chart with signals"></canvas>
 </section>
@@ -147,6 +160,7 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
 
 <footer>Signals use closed candles only, so they never repaint. Entries in the backtest fill at the next candle's open; if stop and target hit in the same candle, it counts as a loss. Data from Binance Futures (gold, silver, oil, crypto and other TradFi contracts) or Binance Spot when a market isn’t listed on futures. This is a tool, not advice.</footer>
 </main>
+<dialog id="pop" aria-labelledby="popTitle"><div class="pop" id="popBody"></div><form method="dialog"><button>Got it</button></form></dialog>
 
 <script>
 const $=s=>document.querySelector(s);
@@ -339,7 +353,7 @@ function render(){
 
   draw();
   const key=V+k[L].t;
-  if(['BUY','SHORT','SELL','COVER'].includes(V)&&key!==lastAlertKey&&!firstLoad)alertMe(`${V} ${sym}`,why);
+  if(['BUY','SHORT','SELL','COVER'].includes(V)&&key!==lastAlertKey&&!firstLoad){alertMe(`${V} ${sym}`,why);popup(V,sym,why,lad,lastT)}
   lastAlertKey=key;firstLoad=false;
 }
 
@@ -364,11 +378,12 @@ function draw(){
   x.globalAlpha=1;
   [['e50',C.e50],['e21',C.e21],['e9',C.e9]].forEach(([n,col])=>{x.strokeStyle=col;x.lineWidth=1.6;x.beginPath();let st=false;
     for(let i=s0;i<k.length;i++){const v=I[n][i];if(isNaN(v))continue;st?x.lineTo(X(i),Y(v)):x.moveTo(X(i),Y(v));st=true}x.stroke()});
-  const tri=(cx,cy,up,col)=>{x.fillStyle=col;x.beginPath();x.moveTo(cx,cy);x.lineTo(cx-6,cy+(up?10:-10));x.lineTo(cx+6,cy+(up?10:-10));x.fill()};
+  const M_={buy:css('--mBuy'),short:css('--mShort'),exit:css('--mExit'),edge:css('--mEdge')};
+  const tri=(cx,cy,up,col)=>{x.fillStyle=col;x.strokeStyle=M_.edge;x.lineWidth=1.5;x.beginPath();x.moveTo(cx,cy);x.lineTo(cx-8,cy+(up?14:-14));x.lineTo(cx+8,cy+(up?14:-14));x.closePath();x.fill();x.stroke()};
   const marks=[...bt.trades,...(bt.open?[bt.open]:[])];
   for(const t of marks){
-    if(t.i>=s0)t.d>0?tri(X(t.i),Y(bars[t.i].l)+4,true,C.buy):tri(X(t.i),Y(bars[t.i].h)-4,false,C.sell);
-    if(t.xi!==undefined&&t.xi>=s0){x.fillStyle=t.pnl>0?C.buy:C.sell;x.beginPath();x.arc(X(t.xi),Y(t.x),4.5,0,7);x.fill()}
+    if(t.i>=s0)t.d>0?tri(X(t.i),Y(bars[t.i].l)+5,true,M_.buy):tri(X(t.i),Y(bars[t.i].h)-5,false,M_.short);
+    if(t.xi!==undefined&&t.xi>=s0){x.fillStyle=M_.exit;x.strokeStyle=M_.edge;x.lineWidth=1.5;x.beginPath();x.arc(X(t.xi),Y(t.x),6,0,7);x.fill();x.stroke()}
   }
   if(bt.open){x.setLineDash([5,4]);[[bt.open.tgt,C.buy],[bt.open.entry,C.hold],[bt.open.stop,C.sell]].forEach(([p,col])=>{
     x.strokeStyle=col;x.beginPath();x.moveTo(X(Math.max(bt.open.i,s0)),Y(p));x.lineTo(W-padR,Y(p));x.stroke()});x.setLineDash([])}
@@ -377,6 +392,19 @@ function draw(){
   [30,70].forEach(v=>{x.beginPath();x.moveTo(0,RY(v));x.lineTo(W-padR,RY(v));x.stroke();x.fillStyle=C.muted;x.fillText(v,W-padR+6,RY(v)+4)});
   x.fillText('RSI',W-padR+6,rt+rh-2);x.strokeStyle=C.muted;x.beginPath();let st=false;
   for(let i=s0;i<k.length;i++){const v=I.r[i];if(isNaN(v))continue;st?x.lineTo(X(i),RY(v)):x.moveTo(X(i),RY(v));st=true}x.stroke();
+}
+
+/* ---------- popup ---------- */
+function popup(V,sym,why,lad,t){
+  const col={BUY:'--mBuy',SHORT:'--mShort',SELL:'--mExit',COVER:'--mExit'}[V];
+  const act={BUY:'Time to enter: buy now',SHORT:'Time to enter: short now',SELL:'Time to exit: close your long',COVER:'Time to exit: close your short'}[V];
+  const rows=lad?[['t','Take profit',lad.t],['e','Entry',lad.e],['s','Stop loss',lad.s]]
+    .map(([c,n,v])=>`<div class="rung ${c}"><span>${n}</span><b>${fp(v)}</b></div>`).join('')
+    :t?`<div class="rung e"><span>Exit price</span><b>${fp(t.x)}</b></div><div class="rung ${t.pnl>0?'t':'s'}"><span>Result after fees</span><b>${pct(t.pnl)}</b></div>`:'';
+  $('#popBody').style.borderTopColor=`var(${col})`;
+  $('#popBody').innerHTML=`<p class="pv" id="popTitle" style="color:var(${col});-webkit-text-stroke:1px var(--mEdge)">${V}</p>
+    <p class="act">${act} · ${sym}</p><p>${why}</p><div class="ladder">${rows}</div>`;
+  const d=$('#pop');if(!d.open)d.showModal();
 }
 
 /* ---------- alerts ---------- */
