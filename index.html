@@ -91,7 +91,7 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
 <body>
 <main>
 <header>
-  <h1>Scalp Signal <small style="font:500 13px Barlow;color:var(--muted)">v3</small></h1>
+  <h1>Scalp Signal <small style="font:500 13px Barlow;color:var(--muted)">v4</small></h1>
   <div class="bar">
     <input type="text" id="sym" aria-label="Any other Binance symbol" placeholder="Other symbol">
     <div class="seg" role="group" aria-label="Timeframe">
@@ -152,6 +152,8 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
       <label>Futures fee per side (%)<input type="number" id="feeFut" step="0.01" min="0"></label>
       <label>Spot fee per side (%)<input type="number" id="feeSpot" step="0.01" min="0"></label>
       <label>Max candles in a trade<input type="number" id="maxBars" step="1" min="3"></label>
+      <label>EMA cross still counts for (candles)<input type="number" id="crossWin" step="1" min="1" max="20"></label>
+      <label class="inline"><input type="checkbox" id="rsiExt">Allow entries when RSI is extreme (catches crashes and spikes)</label>
       <label class="inline"><input type="checkbox" id="shorts">Show short signals (futures only)</label>
       <label class="inline"><input type="checkbox" id="htf">Only trade with the higher-timeframe trend</label>
     </div>
@@ -171,7 +173,7 @@ const PRESETS=[
   {label:'WTI oil',c:['CLUSDT']},
   {label:'Silver',c:['XAGUSDT']},
   {label:'BTC',c:['BTCUSDT']},{label:'ETH',c:['ETHUSDT']},{label:'SOL',c:['SOLUSDT']}];
-const DEF={label:'Gold',cands:['XAUUSDT'],tf:'15m',stopAtr:1.5,tgtAtr:2.5,feeFut:0.05,feeSpot:0.1,maxBars:36,shorts:false,htf:true};
+const DEF={label:'Gold',cands:['XAUUSDT'],tf:'15m',stopAtr:1.5,tgtAtr:2.5,feeFut:0.05,feeSpot:0.1,maxBars:36,shorts:false,htf:true,crossWin:3,rsiExt:false};
 let S={...DEF};
 try{const o=JSON.parse(localStorage.getItem('scalp-settings2')||'{}');S={...DEF,...o}}catch(e){}
 const save=()=>{try{localStorage.setItem('scalp-settings2',JSON.stringify(S))}catch(e){}};
@@ -246,11 +248,11 @@ function indicators(k,hk){
 /* ---------- strategy ---------- */
 function checks(I,i,d){
   const L=d>0,{c,e9,e21,e50,r,hist,vol,vs,htf}=I;
-  let crossed=false;for(let b=1;b<=3;b++)if(L?e9[i-b]<=e21[i-b]:e9[i-b]>=e21[i-b])crossed=true;
+  let crossed=false;for(let b=1;b<=S.crossWin;b++)if(L?e9[i-b]<=e21[i-b]:e9[i-b]>=e21[i-b])crossed=true;
   const list=[
-    {n:L?'Fast EMA crossed above slow (last 3 candles)':'Fast EMA crossed below slow (last 3 candles)',ok:(L?e9[i]>e21[i]:e9[i]<e21[i])&&crossed},
+    {n:`Fast EMA crossed ${L?'above':'below'} slow (last ${S.crossWin} candles)`,ok:(L?e9[i]>e21[i]:e9[i]<e21[i])&&crossed},
     {n:L?'Price above EMA 50':'Price below EMA 50',ok:L?c[i]>e50[i]:c[i]<e50[i]},
-    {n:L?`RSI between 50 and 70 (now ${r[i].toFixed(0)})`:`RSI between 30 and 50 (now ${r[i].toFixed(0)})`,ok:L?r[i]>50&&r[i]<70:r[i]<50&&r[i]>30},
+    {n:S.rsiExt?`RSI ${L?'above':'below'} 50 (now ${r[i].toFixed(0)})`:L?`RSI between 50 and 70 (now ${r[i].toFixed(0)})`:`RSI between 30 and 50 (now ${r[i].toFixed(0)})`,ok:L?r[i]>50&&(S.rsiExt||r[i]<70):r[i]<50&&(S.rsiExt||r[i]>30)},
     {n:L?'MACD momentum rising':'MACD momentum falling',ok:L?hist[i]>0:hist[i]<0},
     {n:'Volume above 20-candle average',ok:vol[i]>vs[i]}];
   if(S.htf)list.push({n:`${HTF[S.tf]} trend ${L?'up':'down'}`,ok:htf[i]===(L?1:-1)});
@@ -426,14 +428,14 @@ $('#alerts').onclick=async()=>{
 /* ---------- controls ---------- */
 function syncUI(){
   document.querySelectorAll('[data-tf]').forEach(b=>b.setAttribute('aria-pressed',b.dataset.tf===S.tf));
-  ['stopAtr','tgtAtr','feeFut','feeSpot','maxBars'].forEach(id=>$('#'+id).value=S[id]);$('#shorts').checked=S.shorts;$('#htf').checked=S.htf;
+  ['stopAtr','tgtAtr','feeFut','feeSpot','maxBars','crossWin'].forEach(id=>$('#'+id).value=S[id]);$('#shorts').checked=S.shorts;$('#htf').checked=S.htf;
 }
 const rerun=()=>{if(data){data.bt=backtest(data.closed,data.I);render()}};
 document.querySelectorAll('[data-tf]').forEach(b=>b.onclick=()=>{if(!HTF[b.dataset.tf])return;S.tf=b.dataset.tf;save();syncUI();firstLoad=true;load()});
 $('#sym').onchange=()=>{const v=$('#sym').value.toUpperCase().trim();if(v)pick(v,[v])};
 $('#refresh').onclick=load;
-['stopAtr','tgtAtr','feeFut','feeSpot','maxBars'].forEach(id=>$('#'+id).onchange=()=>{const v=parseFloat($('#'+id).value);if(v>=0){S[id]=v;save();rerun()}});
-['shorts','htf'].forEach(id=>$('#'+id).onchange=()=>{S[id]=$('#'+id).checked;save();rerun()});
+['stopAtr','tgtAtr','feeFut','feeSpot','maxBars','crossWin'].forEach(id=>$('#'+id).onchange=()=>{const v=parseFloat($('#'+id).value);if(v>=0){S[id]=v;save();rerun()}});
+['shorts','htf','rsiExt'].forEach(id=>$('#'+id).onchange=()=>{S[id]=$('#'+id).checked;save();rerun()});
 addEventListener('resize',draw);
 matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
 if(!HTF[S.tf])S.tf='15m';syncUI();renderChips();pick(S.label,S.cands);setInterval(load,30000);
