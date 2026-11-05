@@ -91,7 +91,7 @@ footer{color:var(--muted);font-size:13px;max-width:80ch}
 <body>
 <main>
 <header>
-  <h1>Scalp Signal</h1>
+  <h1>Scalp Signal <small style="font:500 13px Barlow;color:var(--muted)">v3</small></h1>
   <div class="bar">
     <input type="text" id="sym" aria-label="Any other Binance symbol" placeholder="Other symbol">
     <div class="seg" role="group" aria-label="Timeframe">
@@ -396,8 +396,8 @@ function draw(){
 
 /* ---------- popup ---------- */
 function popup(V,sym,why,lad,t){
-  const col={BUY:'--mBuy',SHORT:'--mShort',SELL:'--mExit',COVER:'--mExit'}[V];
-  const act={BUY:'Time to enter: buy now',SHORT:'Time to enter: short now',SELL:'Time to exit: close your long',COVER:'Time to exit: close your short'}[V];
+  const col={BUY:'--mBuy',SHORT:'--mShort',SELL:'--mExit',COVER:'--mExit',TEST:'--mBuy'}[V];
+  const act={BUY:'Time to enter: buy now',SHORT:'Time to enter: short now',SELL:'Time to exit: close your long',COVER:'Time to exit: close your short',TEST:'Test: this is how an entry alert looks'}[V];
   const rows=lad?[['t','Take profit',lad.t],['e','Entry',lad.e],['s','Stop loss',lad.s]]
     .map(([c,n,v])=>`<div class="rung ${c}"><span>${n}</span><b>${fp(v)}</b></div>`).join('')
     :t?`<div class="rung e"><span>Exit price</span><b>${fp(t.x)}</b></div><div class="rung ${t.pnl>0?'t':'s'}"><span>Result after fees</span><b>${pct(t.pnl)}</b></div>`:'';
@@ -419,6 +419,8 @@ $('#alerts').onclick=async()=>{
   try{ac=ac||new(window.AudioContext||window.webkitAudioContext)();await ac.resume()}catch(e){}
   try{if('Notification'in window&&Notification.permission!=='granted')await Notification.requestPermission()}catch(e){}
   $('#alerts').textContent='Alerts on';alertMe('Test','Alerts are working.');
+  if(data){const e=data.live.c,A=data.I.a[data.closed.length-1];
+    popup('TEST',data.sym,'Not a real signal. Real popups look like this, with live levels.',{t:e+S.tgtAtr*A,e,s:e-S.stopAtr*A},null)}
 };
 
 /* ---------- controls ---------- */
